@@ -96,6 +96,21 @@ def workflow_checked(workflow):
             seen.add((key, field))
             row.update(node=key, input=field)
         bindings[kind] = rows
+    prefix = w.get("prompt_prefix", "")
+    if not isinstance(prefix, str) or len(prefix) > 20000:
+        raise ValueError("默认提示词前缀必须是文字，最多 20000 个字符")
+    w["prompt_prefix"] = prefix
+    target = w.get("prefix_target")
+    if target is None and bindings["texts"]:
+        first = bindings["texts"][0]
+        target = {"node": first["node"], "input": first["input"]}
+    if not bindings["texts"]:
+        if prefix.strip():
+            raise ValueError("设置默认提示词前缀前，请先绑定文字入口")
+        target = None
+    elif not isinstance(target, dict) or not any(target.get("node") == r["node"] and target.get("input") == r["input"] for r in bindings["texts"]):
+        raise ValueError("前缀应用位置已失效，请重新选择文字入口")
+    w["prefix_target"] = {"node": target["node"], "input": target["input"]} if target else None
     if bool(bindings["width"]) != bool(bindings["height"]):
         raise ValueError("宽度与高度入口必须同时绑定")
     outputs = bindings.get("outputs", [])
@@ -126,6 +141,10 @@ def build_graph(workflow, texts, images, width, height, settings):
     graph = copy.deepcopy(w["graph"])
     for kind, values in (("texts", texts), ("images", images)):
         for row, value in zip(b[kind], values):
+            if kind == "texts" and w["prompt_prefix"].strip() and w["prefix_target"] == {"node": row["node"], "input": row["input"]}:
+                value = w["prompt_prefix"].rstrip("\r\n") + "\n" + value
+                if len(value) > 20000:
+                    raise ValueError("默认前缀与本次描述合计不能超过 20000 个字符，请缩短后重试")
             graph[row["node"]]["inputs"][row["input"]] = value
     for kind, value in (("width", width), ("height", height)):
         if value is not None:

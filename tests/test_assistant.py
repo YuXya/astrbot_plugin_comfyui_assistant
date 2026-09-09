@@ -308,3 +308,123 @@ async def test_backend_submission_identity_and_history_contract():
         assert (await backend.history("http://example.test", "pid"))["status"]["completed"]
     finally:
         await backend.close()
+
+
+@pytest.mark.parametrize("prefix,expected", [
+    ("", "金发碧眼猫娘"),
+    ("  \n", "金发碧眼猫娘"),
+    ("masterpiece, best quality,", "masterpiece, best quality,\n金发碧眼猫娘"),
+    ("高质量，\nsource_anime,", "高质量，\nsource_anime,\n金发碧眼猫娘"),
+    ("highres,\r\n", "highres,\n金发碧眼猫娘"),
+])
+def test_prefix_is_applied_only_to_request_copy(prefix, expected):
+    w = workflow(2)
+    w["prompt_prefix"] = prefix
+    original = copy.deepcopy(w)
+    texts = ["金发碧眼猫娘"]
+    graph = build_graph(w, texts, ["first-image", "second-image"], 768, 1024, DEFAULTS)
+    assert graph["text"]["inputs"]["string"] == expected
+    assert texts == ["金发碧眼猫娘"] and w == original
+    assert graph["image0"]["inputs"]["image"] == "first-image"
+    assert graph["image1"]["inputs"]["image"] == "second-image"
+    expected_graph = copy.deepcopy(w["graph"])
+    expected_graph["text"]["inputs"]["string"] = expected
+    expected_graph["image0"]["inputs"]["image"] = "first-image"
+    expected_graph["image1"]["inputs"]["image"] = "second-image"
+    expected_graph["size"]["inputs"].update(width=768, height=1024)
+    expected_graph["sampler"]["inputs"]["seed"] = graph["sampler"]["inputs"]["seed"]
+    assert graph == expected_graph
+
+
+def test_prefix_legacy_defaults_and_stable_target():
+    w = workflow()
+    w.pop("prompt_prefix")
+    w.pop("prefix_target")
+    legacy = copy.deepcopy(w)
+    normalized = workflow_checked(w)
+    assert normalized["prompt_prefix"] == ""
+    assert normalized["prefix_target"] == {"node": "text", "input": "string"}
+    assert w == legacy
+    w = normalized
+    w["graph"]["negative"] = {"class_type": "Simple String", "inputs": {"string": "negative default"}}
+    w["bindings"]["texts"].insert(0, {"node": "negative", "input": "string", "label": "负面提示词"})
+    w["prompt_prefix"] = "high quality,"
+    graph = build_graph(w, ["bad anatomy", "cat"], [], None, None, DEFAULTS)
+    assert graph["negative"]["inputs"]["string"] == "bad anatomy"
+    assert graph["text"]["inputs"]["string"] == "high quality,\ncat"
+    w["bindings"]["texts"].pop()
+    with pytest.raises(ValueError, match="前缀应用位置已失效"):
+        workflow_checked(w)
+
+
+@pytest.mark.parametrize("value", [None, 123, [], "x" * 20001])
+def test_prefix_rejects_invalid_configuration(value):
+    w = workflow()
+    w["prompt_prefix"] = value
+    with pytest.raises(ValueError, match="默认提示词前缀必须"):
+        workflow_checked(w)
+
+
+def test_prefix_requires_text_target_and_enforces_combined_limit():
+    w = workflow()
+    w["prompt_prefix"] = "quality"
+    w["bindings"]["texts"] = []
+    with pytest.raises(ValueError, match="先绑定文字入口"):
+        workflow_checked(w)
+    w["prompt_prefix"] = ""
+    assert workflow_checked(w)["prefix_target"] is None
+    w = workflow()
+    w["prompt_prefix"] = "x" * 10000
+    assert len(build_graph(w, ["y" * 9999], [], None, None, DEFAULTS)["text"]["inputs"]["string"]) == 20000
+    with pytest.raises(ValueError, match="合计不能超过"):
+        build_graph(w, ["y" * 10000], [], None, None, DEFAULTS)
+
+
+@pytest.mark.parametrize("phase", ["queued", "running"])
+async def test_prefix_snapshot_survives_config_edit_restart_queries_and_resend(tmp_path, monkeypatch, phase):
+    rt, sender, backend = runtime(tmp_path)
+    backend.ready = False
+    w = rt.store.workflows()[0]
+    w["prompt_prefix"] = "original prefix,"
+    rt.save_workflow(w)
+    if phase == "queued":
+        monkeypatch.setattr(rt, "spawn", lambda identifier: None)
+    try:
+        result = await create(rt)
+        if phase == "running":
+            async with asyncio.timeout(3):
+                while not backend.submissions:
+                    await asyncio.sleep(0.01)
+        request_file = tmp_path / "tasks" / result["id"] / "request.json"
+        original = request_file.read_bytes()
+        assert json.loads(original)["text"]["inputs"]["string"] == "original prefix,\nsimple test"
+        w["prompt_prefix"] = "new prefix,"
+        rt.save_workflow(w)
+        # A repeat of the same event must retain the original saved request.
+        assert (await create(rt))["id"] == result["id"]
+        assert request_file.read_bytes() == original
+    finally:
+        await rt.stop()
+    backend.ready = True
+    fresh = Runtime(tmp_path, sender, backend=backend)
+    try:
+        assert fresh.store.workflows()[0]["prompt_prefix"] == "new prefix,"
+        await fresh.start()
+        await completed(fresh)
+        assert len(backend.submissions) == 1
+        assert backend.submissions[0][1]["text"]["inputs"]["string"] == "original prefix,\nsimple test"
+        assert len(sender.calls) == 2
+        assert fresh.store.task(result["id"])["workflow_snapshot"]["prompt_prefix"] == "original prefix,"
+        for _ in range(3):
+            fresh.refresh(result["id"])
+            fresh.tasks("qq:GroupMessage:100", "user1")
+        assert len(sender.calls) == 2 and request_file.read_bytes() == original
+        await fresh.resend(result["id"])
+        assert len(backend.submissions) == 1 and len(sender.calls) == 3
+        assert request_file.read_bytes() == original
+        await fresh.create("qq:GroupMessage:100", "user1", "message2", w["name"], ["second scene"])
+        await completed(fresh)
+        assert len(backend.submissions) == 2
+        assert backend.submissions[1][1]["text"]["inputs"]["string"] == "new prefix,\nsecond scene"
+    finally:
+        await fresh.stop()

@@ -1,7 +1,7 @@
 name: astrbot_plugin_comfyui_assistant
 display_name: ComfyUI 绘图助手
 desc: 自动跟进生图并发送结果，支持自定义宽高、文生图、单图和多图编辑、原图重发及工作流管理。
-version: 0.1.0
+version: 0.1.1
 author: YuXya
 repo: https://github.com/YuXya/astrbot_plugin_comfyui_assistant
 astrbot_version: ">=4.27.5,<5"

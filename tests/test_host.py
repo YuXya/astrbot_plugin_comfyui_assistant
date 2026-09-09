@@ -132,6 +132,10 @@ async def test_initialize_and_unload_preserve_foreign_routes_and_tools(module, t
     await plugin.initialize()
     assert {t.name for t in context.provider_manager.llm_tools.func_list} == module.TOOLS
     assert len(context.registered_web_apis) == 3
+    generate = next(t for t in context.provider_manager.llm_tools.func_list if t.name == "comfyui_generate")
+    assert set(generate.parameters["properties"]) == {"workflow_name", "texts", "image_urls", "width", "height", "caption"}
+    assert "前缀" in generate.parameters["properties"]["texts"]["description"]
+    assert "默认提示词前缀由程序自动添加" in module.GUIDANCE
     await plugin.terminate()
     assert context.registered_web_apis == [("/foreign", None, ["GET"], "fixture")]
     assert not context.provider_manager.llm_tools.func_list

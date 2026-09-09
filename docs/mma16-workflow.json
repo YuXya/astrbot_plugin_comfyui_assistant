@@ -1,0 +1,57 @@
+{
+  "source_sha256": "bbc060e68752a90a3aa734eddbc1dcc3fdaf5283c27c1760f6958c0cfc0adb2a",
+  "prompt_id": "0f1fa11a-feef-4de1-91ed-c085de4019f8",
+  "generation": "completed",
+  "sizes": [
+    [
+      768,
+      1024
+    ]
+  ],
+  "seconds": 12.08,
+  "bindings": {
+    "texts": [
+      {
+        "node": "51",
+        "input": "string",
+        "label": "绘画描述"
+      }
+    ],
+    "images": [],
+    "width": [
+      {
+        "node": "28",
+        "input": "width"
+      }
+    ],
+    "height": [
+      {
+        "node": "28",
+        "input": "height"
+      }
+    ],
+    "outputs": [
+      "1"
+    ]
+  },
+  "default_size": [
+    1152,
+    896
+  ],
+  "parameter_checks_passed": true,
+  "qq_messages_sent": false,
+  "images_viewed": false,
+  "backup": "D:\\AI\\ComfyUI-assistant-backups\\20260909-221148-MMA16",
+  "files": [
+    "D:\\Comfy-Desktop\\ComfyUI-Installs\\ComfyUI\\ComfyUI\\user\\default\\workflows\\AstrBot_MMA16_文生图.json",
+    "D:\\Comfy-Desktop\\ComfyUI-Installs\\ComfyUI\\ComfyUI\\user\\default\\workflows\\AstrBot_API\\MMA16文生图.json"
+  ],
+  "active_workflows": [
+    "Krea2图生图",
+    "Krea2多图生图",
+    "MMA16文生图"
+  ],
+  "disabled_workflows": [
+    "Krea2文生图"
+  ]
+}

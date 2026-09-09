@@ -5,7 +5,7 @@ import zipfile
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
-output = root / "dist" / "astrbot_plugin_comfyui_assistant-0.1.1.zip"
+output = root / "dist" / "astrbot_plugin_comfyui_assistant-0.1.2.zip"
 output.parent.mkdir(exist_ok=True)
 files = [root / f for f in ("main.py", "metadata.yaml", "requirements.txt", "README.md", "CHANGELOG.md")]
 files += list((root / "assistant").glob("*.py"))

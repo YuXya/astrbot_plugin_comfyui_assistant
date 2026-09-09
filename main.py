@@ -24,7 +24,7 @@ from .assistant.runtime import Runtime
 PLUGIN = "astrbot_plugin_comfyui_assistant"
 TOOLS = {"comfyui_workflows", "comfyui_generate", "comfyui_tasks", "comfyui_resend"}
 MEDIA_TOOLS = {"get_image_from_context", "get_message_detail", "qts_get_message_detail", "get_recent_messages", "qts_get_recent_messages", "get_user_info", "qts_get_user_info", "view_qq_avatar", "qts_view_qq_avatar", "astrbot_file_read_tool"}
-GUIDANCE = """ComfyUI 绘图助手：先按工作流说明和槽位准备文字及图片。工作流配置的默认提示词前缀由程序自动添加，texts 只填写本次描述或修改要求，无需重复填写已配置的前缀。根据用户明确尺寸或用途选择宽高，成对填写并遵守工具返回的尺寸范围；不要修改模型、采样等参数。comfyui_generate 创建任务后，插件会自动发送开始提示和最终图片，不需要你轮询、读取生成图或调用其他发送工具。本轮不要再输出绘图进度或重复配文。用户询问进度用 comfyui_tasks；用户明确要求重发时用 comfyui_resend，不能以重新生成代替重发。生成完成与发送成功是不同状态，不能把提交或读图说成已发送。生成参数不明确或图片缺失时正常询问。"""
+GUIDANCE = """ComfyUI 绘图助手：先按工作流说明和槽位准备文字及图片。工作流配置的默认提示词前缀由程序自动添加，texts 只填写本次描述或修改要求，无需重复填写已配置的前缀。根据用户明确尺寸或用途选择宽高，成对填写并遵守工具返回的尺寸范围；宽高填写原始目标尺寸，工作流的尺寸写入缩放由程序处理，不要自行乘除。不要修改模型、采样等参数。comfyui_generate 创建任务后，插件会自动发送开始提示和最终图片，不需要你轮询、读取生成图或调用其他发送工具。本轮不要再输出绘图进度或重复配文。用户询问进度用 comfyui_tasks；用户明确要求重发时用 comfyui_resend，不能以重新生成代替重发。生成完成与发送成功是不同状态，不能把提交或读图说成已发送。生成参数不明确或图片缺失时正常询问。"""
 
 
 @dataclass

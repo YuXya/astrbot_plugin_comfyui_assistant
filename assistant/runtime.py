@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 
 from .backend import Backend, Rejected
-from .catalog import build_graph, dimensions, public_workflow, settings_checked, workflow_checked
+from .catalog import build_graph, public_workflow, render_start_message, scaled_dimensions, settings_checked, workflow_checked
 from .media import Media, image_checked
 from .store import Store
 
@@ -99,7 +99,7 @@ class Runtime:
                 raise ValueError("仅可使用本人的有效任务输出图片")
 
     def public_task(self, job, admin=False):
-        keys = ("id", "workflow_name", "generation", "delivery", "start", "error", "created", "updated", "width", "height", "files_expired", "prompt_id")
+        keys = ("id", "workflow_name", "generation", "delivery", "start", "error", "created", "updated", "width", "height", "input_width", "input_height", "files_expired", "prompt_id")
         result = {k: job.get(k) for k in keys}
         result["media"] = [] if job.get("files_expired") else [f"comfy-media:{job['id']}:{i}" for i in range(len(job["outputs"]))]
         result["delivery_meaning"] = "sent 表示平台发送调用返回成功，不表示用户已经看到图片"
@@ -125,14 +125,15 @@ class Runtime:
             w = next((w for w in self.store.workflows() if workflow_name in (w["id"], w["name"]) and w["enabled"]), None)
             if not w:
                 raise ValueError("工作流不存在或已停用，请先查询可用工作流")
-            dimensions(width, height, self.settings, w["bindings"])
+            input_width, input_height = scaled_dimensions(width, height, self.settings, w["bindings"], w.get("size_scale", 1))
+            start_message = render_start_message(self.settings["start_message_template"], width, height, w["name"])
             images = await self.media.resolve(image_urls or [], candidates, len(w["bindings"]["images"]), scope, owner)
             graph = build_graph(w, texts or [], images, width, height, self.settings)
             identifier = uuid.uuid4().hex
             folder = self.root / "tasks" / identifier
             folder.mkdir(parents=True)
             (folder / "request.json").write_text(json.dumps(graph, ensure_ascii=False), encoding="utf-8")
-            job = {"id": identifier, "event_key": event_key, "scope": scope, "owner": owner, "created": time.time(), "workflow_name": w["name"], "workflow_snapshot": w, "server": self.settings["server_url"], "generation": "queued", "delivery": "pending", "start": "pending", "notice": "pending", "prompt_id": None, "outputs": [], "attempts": [], "error": "", "width": width, "height": height, "caption": str(caption or "画好了。")[:500], "files_expired": False}
+            job = {"id": identifier, "event_key": event_key, "scope": scope, "owner": owner, "created": time.time(), "workflow_name": w["name"], "workflow_snapshot": w, "server": self.settings["server_url"], "generation": "queued", "delivery": "pending", "start": "pending", "notice": "pending", "prompt_id": None, "outputs": [], "attempts": [], "error": "", "width": width, "height": height, "input_width": input_width, "input_height": input_height, "start_message": start_message, "caption": str(caption or "画好了。")[:500], "files_expired": False}
             self.store.save_task(job)
             self.spawn(identifier)
             return self.public_task(job)
@@ -194,7 +195,7 @@ class Runtime:
             try:
                 if job["start"] == "pending":
                     size = f"（{job['width']}×{job['height']}）" if job["width"] else ""
-                    await self._send(job, "start", f"开始绘制{size}，完成后发给你。", [])
+                    await self._send(job, "start", job.get("start_message", f"开始绘制{size}，完成后发给你。"), [])
                 if job["generation"] == "queued":
                     graph = json.loads((self.root / "tasks" / task_id / "request.json").read_text(encoding="utf-8"))
                     job["generation"] = "submitting"

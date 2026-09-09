@@ -1,8 +1,15 @@
 """Validated workflow catalog and per-request graph construction."""
 
 import copy
+import math
 import secrets
 import uuid
+from decimal import Decimal, ROUND_HALF_UP
+from string import Formatter
+
+
+DEFAULT_START_MESSAGE = "开始绘制（{size}），完成后发给你。"
+START_MESSAGE_FIELDS = {"size", "width", "height", "workflow"}
 
 
 DEFAULTS = {
@@ -15,7 +22,40 @@ DEFAULTS = {
     "image_days": 7,
     "poll_seconds": 3,
     "tracking_minutes": 30,
+    "start_message_template": DEFAULT_START_MESSAGE,
 }
+
+
+def start_template_checked(template):
+    if not isinstance(template, str) or not template.strip() or len(template) > 1000:
+        raise ValueError("开始提示需要 1—1000 个字符，不能留空")
+    try:
+        for _, name, spec, conversion in Formatter().parse(template):
+            if name is not None and (name not in START_MESSAGE_FIELDS or spec or conversion):
+                raise ValueError("unsupported placeholder")
+    except ValueError as exc:
+        raise ValueError("开始提示仅支持 {size}、{width}、{height}、{workflow}；普通大括号请写 {{ 和 }}") from exc
+    return template
+
+
+def render_start_message(template, width, height, workflow):
+    known = width is not None and height is not None
+    return start_template_checked(template).format(
+        size=f"{width}×{height}" if known else "默认尺寸",
+        width=width if known else "默认", height=height if known else "默认", workflow=workflow,
+    )
+
+
+def size_scale_checked(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("图片大小写入缩放必须是大于 0 的有限数字，例如 1、0.5 或 0.25")
+    try:
+        result = float(value)
+    except OverflowError as exc:
+        raise ValueError("图片大小写入缩放数值过大") from exc
+    if not math.isfinite(result) or result <= 0:
+        raise ValueError("图片大小写入缩放必须是大于 0 的有限数字，例如 1、0.5 或 0.25")
+    return result
 
 
 def settings_checked(data):
@@ -35,6 +75,7 @@ def settings_checked(data):
             raise ValueError(f"{key} 需要是 {low}—{high} 的整数")
     if result["min_edge"] > result["max_edge"] or result["image_days"] > result["record_days"] or result["multiple"] % 8:
         raise ValueError("尺寸范围或保留天数不一致；尺寸步长必须是 8 的倍数")
+    result["start_message_template"] = start_template_checked(result["start_message_template"])
     return {k: result[k] for k in DEFAULTS}
 
 
@@ -79,6 +120,7 @@ def workflow_checked(workflow):
     if not w["name"] or len(w["name"]) > 100:
         raise ValueError("工作流名称需要 1—100 个字符")
     w["enabled"] = bool(w.get("enabled", True))
+    w["size_scale"] = size_scale_checked(w.get("size_scale", 1))
     for field in ("short", "detailed"):
         w[field] = str(w.get(field, ""))[:10000]
     bindings = w.setdefault("bindings", discover(graph))
@@ -130,10 +172,23 @@ def dimensions(width, height, settings, bindings):
         raise ValueError(f"每边须为 {settings['min_edge']}—{settings['max_edge']}、{settings['multiple']} 的倍数，总像素不超过 {settings['max_pixels']}；收到 {width}×{height}")
 
 
+def scaled_dimensions(width, height, settings, bindings, scale=1):
+    dimensions(width, height, settings, bindings)
+    factor = size_scale_checked(scale)
+    if width is None:
+        return None, None
+    # Align the written size only; the requested dimensions remain unchanged.
+    values = [max(Decimal(8), (Decimal(n) * Decimal(str(factor)) / 8).to_integral_value(rounding=ROUND_HALF_UP) * 8) for n in (width, height)]
+    shown = "×".join(format(v.normalize(), "f") for v in values)
+    if any(v > settings["max_edge"] for v in values) or values[0] * values[1] > settings["max_pixels"]:
+        raise ValueError(f"缩放后写入尺寸为 {shown}，每边不能超过 {settings['max_edge']}，总像素不能超过 {settings['max_pixels']}；请调整尺寸或倍率")
+    return int(values[0]), int(values[1])
+
+
 def build_graph(workflow, texts, images, width, height, settings):
     w = workflow_checked(workflow)
     b = w["bindings"]
-    dimensions(width, height, settings, b)
+    width, height = scaled_dimensions(width, height, settings, b, w["size_scale"])
     if not isinstance(texts, list) or len(texts) != len(b["texts"]) or any(not isinstance(t, str) or len(t) > 20000 for t in texts):
         raise ValueError(f"该工作流需要 {len(b['texts'])} 段文字，请按槽位顺序填写")
     if len(images) != len(b["images"]):

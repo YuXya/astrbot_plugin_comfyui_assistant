@@ -10,7 +10,7 @@ import pytest
 from PIL import Image
 
 from assistant.backend import Backend, Rejected
-from assistant.catalog import DEFAULTS, build_graph, dimensions, settings_checked, workflow_checked
+from assistant.catalog import DEFAULTS, build_graph, dimensions, render_start_message, settings_checked, workflow_checked
 from assistant.media import Media
 from assistant.runtime import Runtime
 
@@ -426,5 +426,96 @@ async def test_prefix_snapshot_survives_config_edit_restart_queries_and_resend(t
         await completed(fresh)
         assert len(backend.submissions) == 2
         assert backend.submissions[1][1]["text"]["inputs"]["string"] == "new prefix,\nsecond scene"
+    finally:
+        await fresh.stop()
+
+
+@pytest.mark.parametrize("scale,width,height,expected", [
+    (1,1280,720,(1280,720)), (0.5,1280,720,(640,360)),
+    (0.25,1280,768,(320,192)), (0.1,1280,720,(128,72)),
+    (2,512,512,(1024,1024)), (0.5,None,None,(1024,1024)),
+    (0.3,1280,728,(384,216)), (0.25,1280,720,(320,184)),
+    (0.001,512,512,(8,8)), (0.5,1280,728,(640,368)),
+])
+def test_size_scale_exact_values_and_template_preservation(scale, width, height, expected):
+    w = workflow(2)
+    w["size_scale"] = scale
+    original = copy.deepcopy(w)
+    graph = build_graph(w,["scene"],["one","two"],width,height,DEFAULTS)
+    assert (graph["size"]["inputs"]["width"],graph["size"]["inputs"]["height"]) == expected
+    assert w == original
+    assert graph["image0"]["inputs"]["image"] == "one"
+    assert graph["image1"]["inputs"]["image"] == "two"
+    assert graph["sampler"]["inputs"]["steps"] == original["graph"]["sampler"]["inputs"]["steps"]
+
+
+@pytest.mark.parametrize("value", [0,-0.5,True,"0.5",None,float("inf"),float("nan")])
+def test_size_scale_rejects_invalid_values(value):
+    w=workflow()
+    w["size_scale"]=value
+    with pytest.raises(ValueError,match="图片大小写入缩放"):
+        workflow_checked(w)
+
+
+@pytest.mark.parametrize("scale,width,height", [(8,512,512),(2,1280,720)])
+def test_size_scale_keeps_resource_limits(scale,width,height):
+    w=workflow()
+    w["size_scale"]=scale
+    with pytest.raises(ValueError,match="缩放"):
+        build_graph(w,["scene"],[],width,height,DEFAULTS)
+
+
+@pytest.mark.parametrize("template", ["", "   ", "{unknown}", "{width.__class__}", "{size!r}", "{width:10000000}", "{", "x"*1001, None])
+def test_start_template_validation(template):
+    with pytest.raises(ValueError,match="开始提示"):
+        settings_checked({"start_message_template":template})
+
+
+def test_start_template_renders_original_size_and_default_fallback():
+    template="在画了老大，大小：{size} / {width}×{height} / {workflow} / {{完成}}"
+    assert render_start_message(template,1280,720,"MM") == "在画了老大，大小：1280×720 / 1280×720 / MM / {完成}"
+    assert render_start_message("在画了老大，大小：{size}",None,None,"MM") == "在画了老大，大小：默认尺寸"
+    assert render_start_message("{width}×{height}",None,None,"MM") == "默认×默认"
+    assert settings_checked({})["start_message_template"] == DEFAULTS["start_message_template"]
+    w=workflow()
+    w.pop("size_scale")
+    assert workflow_checked(w)["size_scale"]==1
+
+
+async def test_scaled_task_and_start_message_snapshots_survive_restart_and_resend(tmp_path,monkeypatch):
+    rt,sender,backend=runtime(tmp_path)
+    w=rt.store.workflows()[0]
+    w["size_scale"]=0.5
+    rt.save_workflow(w)
+    rt.configure({"poll_seconds":1,"start_message_template":"在画了老大，大小：{size}"})
+    monkeypatch.setattr(rt,"spawn",lambda identifier:None)
+    try:
+        result=await create(rt,width=1280,height=720)
+        assert (result["width"],result["height"])==(1280,720)
+        assert (result["input_width"],result["input_height"])==(640,360)
+        request_file=tmp_path/"tasks"/result["id"]/"request.json"
+        request_bytes=request_file.read_bytes()
+        w["size_scale"]=1
+        rt.save_workflow(w)
+        rt.configure({"start_message_template":"新提示：{size}"})
+    finally:
+        await rt.stop()
+    fresh=Runtime(tmp_path,sender,backend=backend)
+    try:
+        await fresh.start()
+        await completed(fresh)
+        assert sender.calls[0][1]=="在画了老大，大小：1280×720"
+        assert len(sender.calls)==2 and len(backend.submissions)==1
+        graph=backend.submissions[0][1]
+        assert graph["size"]["inputs"]["width"]==640 and graph["size"]["inputs"]["height"]==360
+        fresh.refresh(result["id"])
+        fresh.tasks("qq:GroupMessage:100","user1")
+        await fresh.resend(result["id"])
+        assert len(sender.calls)==3 and len(backend.submissions)==1
+        assert request_file.read_bytes()==request_bytes
+        await fresh.create("qq:GroupMessage:100","user1","message2",w["name"],["new scene"],width=1280,height=720)
+        await completed(fresh)
+        assert sender.calls[3][1]=="新提示：1280×720"
+        assert backend.submissions[1][1]["size"]["inputs"]["width"]==1280
     finally:
         await fresh.stop()
